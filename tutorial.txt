@@ -1,0 +1,175 @@
+# Lisp Language Tutorial
+
+Lisp is a tiny Lisp dialect that compiles to LLVM IR.
+
+## Installation
+
+```bash
+clang++ -O2 a.cpp -o lisp
+```
+
+## Basic Usage
+
+```bash
+./lisp input.lisp              # compile and run
+./lisp input.lisp -o output    # compile to executable
+./lisp input.lisp --emit-ir     # output LLVM IR (.ll file)
+./lisp input.lisp --emit-asm    # output assembly (.s file)
+./lisp input.lisp --emit-obj    # output object file (.o file)
+```
+
+## Language Basics
+
+### Comments
+
+```lisp
+; Everything after ; is a comment
+```
+
+### Literals
+
+```lisp
+42         ; integers
+3.14       ; floats
+"hello"    ; strings (null-terminated C strings)
+#\a        ; character
+#\newline  ; special character
+#t         ; boolean true
+#f         ; boolean false
+```
+
+### Variables
+
+```lisp
+(def x 10)      ; define a variable
+x                ; reference a variable
+```
+
+### Arithmetic
+
+```lisp
+(+ 1 2)          ; addition
+(- 5 3)          ; subtraction
+(* 4 5)          ; multiplication
+(/ 10 2)         ; division
+(% 7 3)          ; modulo
+```
+
+### Comparisons
+
+```lisp
+(< 3 5)          ; less than
+(> 5 3)          ; greater than
+(= 42 42)        ; equality
+(!= 3 5)         ; not equal
+(<= 3 5)         ; less or equal
+(>= 5 3)         ; greater or equal
+```
+
+### Conditionals
+
+```lisp
+(if #t 100 200)  ; if condition then else
+
+(cond            ; chain of conditionals
+  [#t 7]
+  [#f 8])
+```
+
+### Loops
+
+```lisp
+; simple loop - executes body N times
+(loop 5 (+ 1 2))
+
+; while loop
+(def i 0)
+(while (< i 5)
+  (def i (+ i 1)))
+i
+
+; for loop (var init cond step body)
+(for i 0 (< i 5) (+ i 1))
+```
+
+### Functions
+
+```lisp
+; define a function (name params... body)
+(def (add a b)
+  (+ a b))
+(add 10 20)
+```
+
+### Macros
+
+```lisp
+; macro with parameters
+(mac twice (x)
+  (+ x x))
+(twice 5)  ; expands to (+ 5 5)
+
+; macro with multiple args
+(mac addn (x y)
+  (+ x y))
+(addn 3 4)
+```
+
+### Import
+
+```lisp
+; import another source file
+(import "helper.lisp")
+```
+
+### Raw LLVM IR
+
+```lisp
+; inline raw LLVM IR (must be valid LLVM syntax)
+(llvm "%result = add i32 1, 2")
+```
+
+### FFI (Foreign Function Interface)
+
+```lisp
+; declare external C function
+(ffi int putchar (int))
+(putchar 65)  ; prints 'A'
+```
+
+## Standard Library Functions
+
+Built-in functions available without declaration:
+- `printf` - print formatted (like C printf)
+- `puts` - print string
+- `putchar` - print character
+
+## Type System
+
+Types are inferred automatically:
+- `int` - 32-bit integer
+- `float` - double precision float
+- `bool` - i1 boolean
+- `char` - i8 character
+- `ptr` - pointer type
+
+## Tips
+
+1. **Strings are i8* pointers** - use `puts` to print them
+2. **Booleans are i1** - 1 = true, 0 = false
+3. **All expressions return a value**
+4. **Variables are mutable** - use `(def x ...)` to reassign
+
+## Troubleshooting
+
+### "error: expected operator"
+Check your parentheses - every open `(` needs a matching `)`.
+
+### "llc failed"
+The generated LLVM IR has an error. Use `--emit-ir` to inspect the .ll file.
+
+### Infinite loop
+Ensure while/for loops have a condition that eventually becomes false.
+
+## File Extension
+Use `.lisp` for Lisp source files.
