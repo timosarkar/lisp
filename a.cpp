@@ -19,7 +19,7 @@ enum class TokenType {
     Eof
 };
 
-enum class Type { Int, Float, Bool, Char, Ptr };
+enum class Type { Int, Float, Bool, Char, Ptr, FuncRef };
 
 struct Token { TokenType type; string val; };
 struct Value { Type type; string name; bool ptr = false; };
@@ -59,9 +59,87 @@ class Compiler {
         {"<=",{"sle","ole"}}, {">=",{"sge","oge"}}
     };
 
-    // ── helpers ──────────────────────────────────────────────────────────────
-    [[noreturn]] void err(const char* m) { cerr << "error: " << m << "\n"; exit(1); }
-    [[noreturn]] void err(const string& m) { cerr << "error: " << m << "\n"; exit(1); }
+    // ── error with context ─────────────────────────────────────────────────────
+    size_t errLine = 0, errCol = 0;
+
+    void updateErrPos() {
+        errLine = 1; errCol = 1;
+        for (size_t i = 0; i < pos && i < src.size(); ++i) {
+            if (src[i] == '\n') { errLine++; errCol = 1; }
+            else errCol++;
+        }
+    }
+
+    string getErrLine() {
+        size_t start = pos;
+        while (start > 0 && src[start-1] != '\n') start--;
+        size_t end = pos;
+        while (end < src.size() && src[end] != '\n') end++;
+        return src.substr(start, end - start);
+    }
+
+    [[noreturn]] void err(const char* m) {
+        updateErrPos();
+        cerr << "\n========================================\n";
+        cerr << "ERROR at line " << errLine << ", col " << errCol << "\n";
+        string line = getErrLine();
+        if (!line.empty()) {
+            if (line.size() > 50) line = line.substr(0, 50) + "...";
+            cerr << "Context: " << line << "\n";
+            for (size_t i = 0; i < 14 + errCol && i < 50; i++) cerr << " ";
+            cerr << "^\n";
+        }
+        cerr << "Message: " << m << "\n";
+        cerr << "========================================\n";
+        exit(1);
+    }
+
+    [[noreturn]] void err(const string& m) { err(m.c_str()); }
+
+    // ── expect with helpful message ──────────────────────────────────────────
+    [[noreturn]] void expected(const char* what) {
+        updateErrPos();
+        string got = "unknown";
+        switch (cur.type) {
+            case TokenType::LParen: got = "'('"; break;
+            case TokenType::RParen: got = "')'"; break;
+            case TokenType::LBrack: got = "'['"; break;
+            case TokenType::RBrack: got = "']'"; break;
+            case TokenType::Int: got = "integer"; break;
+            case TokenType::Float: got = "float"; break;
+            case TokenType::Str: got = "string"; break;
+            case TokenType::Char: got = "char"; break;
+            case TokenType::Bool: got = "bool"; break;
+            case TokenType::Op: got = "operator '" + cur.val + "'"; break;
+            case TokenType::Ident: got = "identifier '" + cur.val + "'"; break;
+            case TokenType::Eof: got = "end of file"; break;
+            default: got = "token"; break;
+        }
+        cerr << "\n========================================\n";
+        cerr << "SYNTAX ERROR at line " << errLine << ", col " << errCol << "\n";
+        string line = getErrLine();
+        if (!line.empty()) {
+            if (line.size() > 50) line = line.substr(0, 50) + "...";
+            cerr << "Context: " << line << "\n";
+        }
+        cerr << "Expected: " << what << "\n";
+        cerr << "Got: " << got << "\n";
+        if (cur.type == TokenType::Ident && cur.val == "def")
+            cerr << "Hint: Use '(def name value)' not '(define ...)'" << "\n";
+        if (cur.type == TokenType::Ident && cur.val == "macro")
+            cerr << "Hint: Use '(mac name ...)' not '(macro ...)'" << "\n";
+        if (cur.type == TokenType::Ident && cur.val == "extern")
+            cerr << "Hint: Use '(ffi ...)' not '(extern ...)'" << "\n";
+        if (cur.type == TokenType::Ident && cur.val == "raw-ir")
+            cerr << "Hint: Use '(llvm ...)' not '(raw-ir ...)'" << "\n";
+        cerr << "========================================\n";
+        exit(1);
+    }
+
+    void expect(TokenType t, const char* what) {
+        if (cur.type != t) expected(what);
+        adv();
+    }
 
     string ty(Type t) {
         switch (t) {
@@ -69,6 +147,7 @@ class Compiler {
             case Type::Bool:  return "i1";
             case Type::Char:  return "i8";
             case Type::Ptr:   return "i8*";
+            case Type::FuncRef: return "i32*";
             default:          return "i32";
         }
     }
@@ -192,11 +271,6 @@ class Compiler {
 
     void adv() { cur = next(); }
 
-    void expect(TokenType t, const char* msg) {
-        if (cur.type != t) err(msg);
-        adv();
-    }
-
     // ── type parsing  (int float bool char ptr) ───────────────────────────────
     Type parseTypeName() {
         if (cur.type != TokenType::Ident) err("expected type name");
@@ -216,6 +290,17 @@ class Compiler {
         ir << "  " << reg << " = load " << ty(v.type) << ", "
            << ty(v.type) << "* " << v.name << "\n";
         return {v.type, reg};
+    }
+
+    // Convert i32 to i1 for br i1 instructions
+    Value condToI1(Value v) {
+        v = load(v);
+        if (v.type == Type::Int) {
+            string reg = t();
+            ir << "  " << reg << " = icmp ne i32 " << v.name << ", 0\n";
+            return {Type::Bool, reg};
+        }
+        return v;
     }
 
     Value conv(Value v) {
@@ -340,7 +425,7 @@ class Compiler {
         pos = 0;
         adv();
         Value result = {Type::Int, ""};
-        while (cur.type != TokenType::Eof) result = load(parse());
+        while (cur.type != TokenType::Eof && cur.type != TokenType::RParen) result = load(parse());
 
         src = savedSrc;
         pos = savedPos;
@@ -487,7 +572,9 @@ class Compiler {
                         funcs[fname].paramTypes.push_back(pt);
                     }
 
-                    Value result = load(parse());
+                    Value result = {Type::Int, ""};
+                    while (cur.type != TokenType::RParen && cur.type != TokenType::Eof)
+                        result = load(parse());
                     if (!hasRetType) funcs[fname].retType = result.type;
                     else result.type = explicitRet;
 
@@ -572,7 +659,7 @@ class Compiler {
                 ir << headerBlock << ":\n";
                 blk = headerBlock;
 
-                Value cond = load(parse()); // condition expression
+                Value cond = condToI1(parse()); // condition expression
                 ir << "  br i1 " << cond.name << ", label %" << bodyBlock
                    << ", label %" << exitBlock << "\n";
 
@@ -656,7 +743,7 @@ class Compiler {
             // ── (if cond then else) ───────────────────────────────────────
             if (cur.type == TokenType::If) {
                 adv();
-                Value c = load(parse());
+                Value c = condToI1(parse());
                 string thenL = L(), elseL = L(), endL = L();
                 ir << "  br i1 " << c.name << ", label %" << thenL << ", label %" << elseL << "\n";
                 ir << thenL << ":\n"; blk = thenL;
@@ -680,7 +767,7 @@ class Compiler {
                 vector<pair<Value,string>> rs;
                 while (cur.type == TokenType::LBrack) {
                     adv();
-                    Value c = load(parse());
+                    Value c = condToI1(parse());
                     string thenL = L(), nextL = L();
                     ir << "  br i1 " << c.name << ", label %" << thenL << ", label %" << nextL << "\n";
                     ir << thenL << ":\n"; blk = thenL;
@@ -739,6 +826,55 @@ class Compiler {
         // ── variable reference ─────────────────────────────────────────────
         if (cur.type == TokenType::Ident) {
             string name = cur.val; adv();
+
+            // If identifier is followed by LParen, check if it's a function call
+            if (cur.type == TokenType::LParen) {
+                // First check if it's a function in our map
+                if (funcs.count(name)) {
+                    // Known function call
+                    vector<Value> args;
+                    while (cur.type != TokenType::RParen) args.push_back(load(parse()));
+                    adv();
+                    Func& fn = funcs[name];
+                    string res = t();
+                    ir << "  " << res << " = call " << ty(fn.retType) << " @" << name << "(";
+                    for (size_t i = 0; i < args.size(); ++i)
+                        ir << (i ? ", " : "") << ty(args[i].type) << " " << args[i].name;
+                    ir << ")\n";
+                    return {fn.retType, res};
+                }
+                // Check if it's a variable (could hold a function reference)
+                if (vars.count(name)) {
+                    Value& var = vars[name];
+                    vector<Value> args;
+                    while (cur.type != TokenType::RParen) args.push_back(load(parse()));
+                    adv();
+                    string res = t();
+                    // Load the function pointer from the variable and call it
+                    string fptr = t();
+                    ir << "  " << fptr << " = load i32*, i32** " << var.name << "\n";
+                    ir << "  " << res << " = call i32 " << fptr << "(";
+                    for (size_t i = 0; i < args.size(); ++i)
+                        ir << (i ? ", " : "") << ty(args[i].type) << " " << args[i].name;
+                    ir << ")\n";
+                    return {Type::Int, res};
+                }
+                // Unknown function call
+                err("undefined function: " + name);
+            }
+
+            // Function reference as value (bare identifier, not followed by LParen)
+            if (funcs.count(name)) {
+                // Return a FuncRef - store function pointer in a variable
+                string res = t();
+                string ptr = t();
+                ir << "  " << ptr << " = alloca i32*\n";
+                ir << "  " << res << " = bitcast i32 (...)* @" << name << " to i32*\n";
+                ir << "  store i32* " << res << ", i32** " << ptr << "\n";
+                return {Type::FuncRef, ptr, true};
+            }
+
+            // Just a variable reference
             if (!vars.count(name)) err("undefined variable: " + name);
             return vars[name];
         }

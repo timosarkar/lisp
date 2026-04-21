@@ -1,2 +1,31 @@
+# Compiled binaries
 lisp_compiler
+a.out
+*.o
+
+# Generated LLVM IR
+*.ll
+
+# Generated assembly
+*.s
+
+# Test binaries
 tests/build/
+/tmp/*
+*_c
+*_lisp
+
+# OS files
+.DS_Store
+*.swp
+*~
+
+# Build artifacts
+fact_lisp fib_lisp sieve_lisp hello_lisp string_ops_lisp
+fact_lisp.ll fib_lisp.ll sieve_lisp.ll hello_lisp.ll string_ops_lisp.ll
+benchmark.c benchmark.ll benchmark_lisp
+
+# Editor files
+*.sublime-*
+*.vscode/
+.idea/
